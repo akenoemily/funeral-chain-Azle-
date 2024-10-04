@@ -100,94 +100,118 @@ const clientStorage = StableBTreeMap(2, text, Client);
 export default Canister({
   // Create a new service provider
   createServiceProvider: update(
-    [ServiceProviderPayload],
-    Result(ServiceProvider, text),
-    (payload) => {
-      if (!payload.name || !payload.service_type || !payload.contact_info) {
-        return Err(
-          "Ensure 'name', 'service_type', and 'contact_info' are provided."
-        );
-      }
-  
-      const id = uuidv4();
-      const serviceProvider = {
-        id,
-        name: payload.name,
-        service_type: payload.service_type,
-        contact_info: payload.contact_info,
-        createdAt: ic.time(),
-        average_rating: 0n,
-        reviews: [],
-        availability: payload.availability,  // Ensure this matches Vec(nat64)
-      };
-  
-      serviceProviderStorage.insert(id, serviceProvider);
-      return Ok(serviceProvider);
+  [ServiceProviderPayload],
+  Result(ServiceProvider, text),
+  (payload) => {
+    // Trim strings and validate that they are not empty
+    if (!payload.name.trim() || !payload.service_type.trim() || !payload.contact_info.trim()) {
+      return Err(
+        "Ensure 'name', 'service_type', and 'contact_info' are provided and non-empty."
+      );
     }
-  ),
+
+    // Validate that availability contains valid nat64 values
+    if (!payload.availability.every(date => typeof date === 'bigint')) {
+      return Err("Availability must be an array of nat64 (bigint) values.");
+    }
+
+    const id = uuidv4();
+    const serviceProvider = {
+      id,
+      name: payload.name.trim(),
+      service_type: payload.service_type.trim(),
+      contact_info: payload.contact_info.trim(),
+      createdAt: ic.time(),
+      average_rating: 0n,
+      reviews: [],
+      availability: payload.availability,
+    };
+
+    serviceProviderStorage.insert(id, serviceProvider);
+    return Ok(serviceProvider);
+  }
+),
+
   
 
   // Create a new booking
   createBooking: update([BookingPayload], Result(Booking, text), (payload) => {
-    const serviceProviderOpt = serviceProviderStorage.get(
-      payload.service_provider_id
-    );
-    if ("None" in serviceProviderOpt) {
-      return Err("Invalid service provider.");
-    }
+  const serviceProviderOpt = serviceProviderStorage.get(payload.service_provider_id);
+  if ("None" in serviceProviderOpt) {
+    return Err("Service provider not found.");
+  }
 
-    const serviceProvider = serviceProviderOpt.Some;
-    if (!serviceProvider.availability.includes(payload.service_date)) {
-      return Err("Service provider is not available on the selected date.");
-    }
+  const clientOpt = clientStorage.get(payload.client_id);
+  if ("None" in clientOpt) {
+    return Err("Client not found.");
+  }
 
-    const id = uuidv4();
-    const booking = {
-      id,
-      service_provider_id: payload.service_provider_id,
-      client_id: payload.client_id,
-      service_date: payload.service_date,
-      service_type: payload.service_type,
-      status: BookingStatusEnum.Pending,
-      createdAt: ic.time(),
-    };
+  const serviceProvider = serviceProviderOpt.Some;
 
-    bookingStorage.insert(id, booking);
-    return Ok(booking);
-  }),
+  // Ensure availability is defined
+  if (!serviceProvider.availability || !serviceProvider.availability.length) {
+    return Err("Service provider has no availability.");
+  }
+
+  if (!serviceProvider.availability.includes(payload.service_date)) {
+    return Err("Service provider is not available on the selected date.");
+  }
+
+  const id = uuidv4();
+  const booking = {
+    id,
+    service_provider_id: payload.service_provider_id,
+    client_id: payload.client_id,
+    service_date: payload.service_date,
+    service_type: payload.service_type,
+    status: BookingStatusEnum.Pending,
+    createdAt: ic.time(),
+  };
+
+  bookingStorage.insert(id, booking);
+  return Ok(booking);
+}),
+
 
   // Reschedule a booking
   rescheduleBooking: update(
-    [text, nat64],
-    Result(Null, text),
-    (bookingId, newDate) => {
-      const bookingOpt = bookingStorage.get(bookingId);
-      if ("None" in bookingOpt) {
-        return Err("Booking not found.");
-      }
-
-      const booking = bookingOpt.Some;
-      if (booking.status !== BookingStatusEnum.Pending) {
-        return Err("Only pending bookings can be rescheduled.");
-      }
-
-      const serviceProviderOpt = serviceProviderStorage.get(
-        booking.service_provider_id
-      );
-      if ("None" in serviceProviderOpt) {
-        return Err("Service provider not found.");
-      }
-
-      const serviceProvider = serviceProviderOpt.Some;
-      if (!serviceProvider.availability.includes(newDate)) {
-        return Err("Service provider is not available on the new date.");
-      }
-
-      booking.service_date = newDate;
-      bookingStorage.insert(bookingId, booking);
-      return Ok(null);
+  [text, nat64],
+  Result(Null, text),
+  (bookingId, newDate) => {
+    const bookingOpt = bookingStorage.get(bookingId);
+    if ("None" in bookingOpt) {
+      return Err("Booking not found.");
     }
-  ),
+
+    const booking = bookingOpt.Some;
+
+    // Allow rescheduling for Pending and Confirmed bookings
+    if (![BookingStatusEnum.Pending, BookingStatusEnum.Confirmed].includes(booking.status)) {
+      return Err("Only pending or confirmed bookings can be rescheduled.");
+    }
+
+    const serviceProviderOpt = serviceProviderStorage.get(booking.service_provider_id);
+    if ("None" in serviceProviderOpt) {
+      return Err("Service provider not found.");
+    }
+
+    const serviceProvider = serviceProviderOpt.Some;
+
+    // Ensure availability is defined
+    if (!serviceProvider.availability || !serviceProvider.availability.length) {
+      return Err("Service provider has no availability.");
+    }
+
+    if (!serviceProvider.availability.includes(newDate)) {
+      return Err("Service provider is not available on the new date.");
+    }
+
+    booking.service_date = newDate;
+    bookingStorage.insert(bookingId, booking);
+    return Ok(null);
+  }
+),
+
 
 // Add a review for a completed booking
 addReview: update([ReviewPayload], Result(Null, text), (payload) => {
@@ -197,8 +221,27 @@ addReview: update([ReviewPayload], Result(Null, text), (payload) => {
   }
 
   const booking = bookingOpt.Some;
+
   if (booking.status !== BookingStatusEnum.Completed) {
     return Err("Only completed bookings can be reviewed.");
+  }
+
+  const serviceProviderOpt = serviceProviderStorage.get(booking.service_provider_id);
+  if ("None" in serviceProviderOpt) {
+    return Err("Service provider not found.");
+  }
+
+  const serviceProvider = serviceProviderOpt.Some;
+
+  // Prevent duplicate reviews for the same booking
+  const existingReview = serviceProvider.reviews.find(review => review.client_id === booking.client_id);
+  if (existingReview) {
+    return Err("You have already reviewed this booking.");
+  }
+
+  // Validate rating (1 to 5)
+  if (payload.rating < 1 || payload.rating > 5) {
+    return Err("Rating must be between 1 and 5.");
   }
 
   const review = {
@@ -208,17 +251,8 @@ addReview: update([ReviewPayload], Result(Null, text), (payload) => {
     createdAt: ic.time(),
   };
 
-  const serviceProviderOpt = serviceProviderStorage.get(
-    booking.service_provider_id
-  );
-  if ("None" in serviceProviderOpt) {
-    return Err("Service provider not found.");
-  }
-
-  const serviceProvider = serviceProviderOpt.Some;
   serviceProvider.reviews.push(review);
 
-  // Explicitly type sum as bigint and r as the review object
   const totalRatings = serviceProvider.reviews.reduce(
     (sum: bigint, r: { clientId: string; rating: bigint; comment: string; createdAt: bigint }) => sum + r.rating, 
     0n  // Start sum with a bigint value
@@ -231,36 +265,44 @@ addReview: update([ReviewPayload], Result(Null, text), (payload) => {
 }),
 
 
+
   // Create a new client
   createClient: update([ClientPayload], Result(Client, text), (payload) => {
-    if (!payload.name || !payload.contact_info) {
-      return Err("Ensure 'name' and 'contact_info' are provided.");
-    }
+  // Trim strings and validate that they are not empty
+  if (!payload.name.trim() || !payload.contact_info.trim()) {
+    return Err("Ensure 'name' and 'contact_info' are provided and non-empty.");
+  }
 
-    const id = uuidv4();
-    const client = {
-      id,
-      name: payload.name,
-      contact_info: payload.contact_info,
-    };
+  // Check for duplicate clients based on contact info
+  const existingClient = clientStorage.values().find(client => client.contact_info === payload.contact_info.trim());
+  if (existingClient) {
+    return Err("A client with this contact info already exists.");
+  }
 
-    clientStorage.insert(id, client);
-    return Ok(client);
-  }),
+  const id = uuidv4();
+  const client = {
+    id,
+    name: payload.name.trim(),
+    contact_info: payload.contact_info.trim(),
+  };
+
+  clientStorage.insert(id, client);
+  return Ok(client);
+}),
 
   // Get service provider booking history
   getServiceProviderHistory: query(
-    [text],
-    Result(Vec(Booking), text),
-    (serviceProviderId) => {
-      const bookings = bookingStorage
-        .values()
-        .filter((booking) => booking.service_provider_id === serviceProviderId);
+  [text],
+  Result(Vec(Booking), text),
+  (serviceProviderId) => {
+    const bookings = bookingStorage
+      .filter((booking) => booking.service_provider_id === serviceProviderId)
+      .values();
 
-      if (bookings.length === 0) {
-        return Err("No bookings found for this service provider.");
-      }
-      return Ok(bookings);
+    if (bookings.length === 0) {
+      return Err("No bookings found for this service provider.");
     }
-  ),
-});
+    return Ok(bookings);
+  }
+),
+
