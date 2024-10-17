@@ -1,8 +1,162 @@
-service: () -> {
-    addReview: (record {comment:text; rating:nat64; booking_id:text}) -> (variant {Ok; Err:text});
-    createBooking: (record {service_date:nat64; service_type:text; service_provider_id:text; client_id:text}) -> (variant {Ok:record {id:text; status:text; service_date:nat64; service_type:text; service_provider_id:text; createdAt:nat64; client_id:text}; Err:text});
-    createClient: (record {name:text; contact_info:text}) -> (variant {Ok:record {id:text; name:text; contact_info:text}; Err:text});
-    createServiceProvider: (record {service_type:text; name:text; availability:vec nat64; contact_info:text}) -> (variant {Ok:record {id:text; reviews:vec record {clientId:text; createdAt:nat64; comment:text; rating:nat64}; service_type:text; name:text; createdAt:nat64; availability:vec nat64; contact_info:text; average_rating:nat64}; Err:text});
-    getServiceProviderHistory: (text) -> (variant {Ok:vec record {id:text; status:text; service_date:nat64; service_type:text; service_provider_id:text; createdAt:nat64; client_id:text}; Err:text}) query;
-    rescheduleBooking: (text, nat64) -> (variant {Ok; Err:text});
+service : () -> {
+    addReview: (record {
+        booking_id: text;
+        rating: nat64;
+        comment: text;
+    }) -> (variant {
+        Ok: record {
+            id: text;
+            name: text;
+            service_type: text;
+            contact_info: text;
+            createdAt: nat64;
+            average_rating: nat64;
+            reviews: vec record {
+                clientId: text;
+                rating: nat64;
+                comment: text;
+                createdAt: nat64;
+            };
+            availability: vec nat64;
+        };
+        Err: text;
+    });
+
+    createBooking: (record {
+        service_provider_id: text;
+        client_id: text;
+        service_date: nat64;
+        service_type: text;
+    }) -> (variant {
+        Ok: record {
+            id: text;
+            service_provider_id: text;
+            client_id: text;
+            service_date: nat64;
+            service_type: text;
+            status: text;
+            createdAt: nat64;
+        };
+        Err: text;
+    });
+
+    createClient: (record {
+        name: text;
+        contact_info: text;
+    }) -> (variant {
+        Ok: record {
+            id: text;
+            name: text;
+            contact_info: text;
+        };
+        Err: text;
+    });
+
+    createServiceProvider: (record {
+        name: text;
+        service_type: text;
+        contact_info: text;
+        availability: vec nat64;
+    }) -> (variant {
+        Ok: record {
+            id: text;
+            name: text;
+            service_type: text;
+            contact_info: text;
+            createdAt: nat64;
+            average_rating: nat64;
+            reviews: vec record {
+                clientId: text;
+                rating: nat64;
+                comment: text;
+                createdAt: nat64;
+            };
+            availability: vec nat64;
+        };
+        Err: text;
+    });
+
+    getServiceProviderHistory: (text) -> (variant {
+        Ok: vec record {
+            id: text;
+            service_provider_id: text;
+            client_id: text;
+            service_date: nat64;
+            service_type: text;
+            status: text;
+            createdAt: nat64;
+        };
+        Err: text;
+    }) query;
+
+    rescheduleBooking: (text, nat64) -> (variant {
+        Ok: record {
+            id: text;
+            service_provider_id: text;
+            client_id: text;
+            service_date: nat64;
+            service_type: text;
+            status: text;
+            createdAt: nat64;
+        };
+        Err: text;
+    });
+
+    getAllServiceProviders: () -> (variant {
+        Ok: vec record {
+            id: text;
+            name: text;
+            service_type: text;
+            contact_info: text;
+            createdAt: nat64;
+            average_rating: nat64;
+            reviews: vec record {
+                clientId: text;
+                rating: nat64;
+                comment: text;
+                createdAt: nat64;
+            };
+            availability: vec nat64;
+        };
+        Err: text;
+    }) query;
+
+    getClientHistory: (text) -> (variant {
+        Ok: vec record {
+            id: text;
+            service_provider_id: text;
+            client_id: text;
+            service_date: nat64;
+            service_type: text;
+            status: text;
+            createdAt: nat64;
+        };
+        Err: text;
+    }) query;
+
+    cancelBooking: (text) -> (variant {
+        Ok: record {
+            id: text;
+            service_provider_id: text;
+            client_id: text;
+            service_date: nat64;
+            service_type: text;
+            status: text;
+            createdAt: nat64;
+        };
+        Err: text;
+    });
+
+    confirmBooking: (text) -> (variant {
+        Ok: record {
+            id: text;
+            service_provider_id: text;
+            client_id: text;
+            service_date: nat64;
+            service_type: text;
+            status: text;
+            createdAt: nat64;
+        };
+        Err: text;
+    });
 }

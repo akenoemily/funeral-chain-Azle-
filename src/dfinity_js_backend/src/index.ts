@@ -96,6 +96,36 @@ const serviceProviderStorage = StableBTreeMap(0, text, ServiceProvider);
 const bookingStorage = StableBTreeMap(1, text, Booking);
 const clientStorage = StableBTreeMap(2, text, Client);
 
+// Helper functions for input validation
+function validateServiceProviderPayload(payload: typeof ServiceProviderPayload): Result<null, string> {
+  if (!payload.name || payload.name.trim() === "") return Err("Name is required");
+  if (!payload.service_type || payload.service_type.trim() === "") return Err("Service type is required");
+  if (!payload.contact_info || payload.contact_info.trim() === "") return Err("Contact info is required");
+  if (!payload.availability || payload.availability.length === 0) return Err("Availability is required");
+  return Ok(null);
+}
+
+function validateBookingPayload(payload: typeof BookingPayload): Result<null, string> {
+  if (!payload.service_provider_id || payload.service_provider_id.trim() === "") return Err("Service provider ID is required");
+  if (!payload.client_id || payload.client_id.trim() === "") return Err("Client ID is required");
+  if (!payload.service_date) return Err("Service date is required");
+  if (!payload.service_type || payload.service_type.trim() === "") return Err("Service type is required");
+  return Ok(null);
+}
+
+function validateClientPayload(payload: typeof ClientPayload): Result<null, string> {
+  if (!payload.name || payload.name.trim() === "") return Err("Name is required");
+  if (!payload.contact_info || payload.contact_info.trim() === "") return Err("Contact info is required");
+  return Ok(null);
+}
+
+function validateReviewPayload(payload: typeof ReviewPayload): Result<null, string> {
+  if (!payload.booking_id || payload.booking_id.trim() === "") return Err("Booking ID is required");
+  if (payload.rating < 1 || payload.rating > 5) return Err("Rating must be between 1 and 5");
+  if (!payload.comment || payload.comment.trim() === "") return Err("Comment is required");
+  return Ok(null);
+}
+
 // Canister definition
 export default Canister({
   // Create a new service provider
@@ -103,12 +133,11 @@ export default Canister({
     [ServiceProviderPayload],
     Result(ServiceProvider, text),
     (payload) => {
-      if (!payload.name || !payload.service_type || !payload.contact_info) {
-        return Err(
-          "Ensure 'name', 'service_type', and 'contact_info' are provided."
-        );
+      const validationResult = validateServiceProviderPayload(payload);
+      if ("Err" in validationResult) {
+        return Err(validationResult.Err);
       }
-  
+
       const id = uuidv4();
       const serviceProvider = {
         id,
@@ -118,17 +147,21 @@ export default Canister({
         createdAt: ic.time(),
         average_rating: 0n,
         reviews: [],
-        availability: payload.availability,  // Ensure this matches Vec(nat64)
+        availability: payload.availability,
       };
-  
+
       serviceProviderStorage.insert(id, serviceProvider);
       return Ok(serviceProvider);
     }
   ),
-  
 
   // Create a new booking
   createBooking: update([BookingPayload], Result(Booking, text), (payload) => {
+    const validationResult = validateBookingPayload(payload);
+    if ("Err" in validationResult) {
+      return Err(validationResult.Err);
+    }
+
     const serviceProviderOpt = serviceProviderStorage.get(
       payload.service_provider_id
     );
@@ -159,7 +192,7 @@ export default Canister({
   // Reschedule a booking
   rescheduleBooking: update(
     [text, nat64],
-    Result(Null, text),
+    Result(Booking, text),
     (bookingId, newDate) => {
       const bookingOpt = bookingStorage.get(bookingId);
       if ("None" in bookingOpt) {
@@ -185,56 +218,60 @@ export default Canister({
 
       booking.service_date = newDate;
       bookingStorage.insert(bookingId, booking);
-      return Ok(null);
+      return Ok(booking);
     }
   ),
 
-// Add a review for a completed booking
-addReview: update([ReviewPayload], Result(Null, text), (payload) => {
-  const bookingOpt = bookingStorage.get(payload.booking_id);
-  if ("None" in bookingOpt) {
-    return Err("Booking not found.");
-  }
+  // Add a review for a completed booking
+  addReview: update([ReviewPayload], Result(ServiceProvider, text), (payload) => {
+    const validationResult = validateReviewPayload(payload);
+    if ("Err" in validationResult) {
+      return Err(validationResult.Err);
+    }
 
-  const booking = bookingOpt.Some;
-  if (booking.status !== BookingStatusEnum.Completed) {
-    return Err("Only completed bookings can be reviewed.");
-  }
+    const bookingOpt = bookingStorage.get(payload.booking_id);
+    if ("None" in bookingOpt) {
+      return Err("Booking not found.");
+    }
 
-  const review = {
-    client_id: booking.client_id,
-    rating: payload.rating,
-    comment: payload.comment,
-    createdAt: ic.time(),
-  };
+    const booking = bookingOpt.Some;
+    if (booking.status !== BookingStatusEnum.Completed) {
+      return Err("Only completed bookings can be reviewed.");
+    }
 
-  const serviceProviderOpt = serviceProviderStorage.get(
-    booking.service_provider_id
-  );
-  if ("None" in serviceProviderOpt) {
-    return Err("Service provider not found.");
-  }
+    const review = {
+      client_id: booking.client_id,
+      rating: payload.rating,
+      comment: payload.comment,
+      createdAt: ic.time(),
+    };
 
-  const serviceProvider = serviceProviderOpt.Some;
-  serviceProvider.reviews.push(review);
+    const serviceProviderOpt = serviceProviderStorage.get(
+      booking.service_provider_id
+    );
+    if ("None" in serviceProviderOpt) {
+      return Err("Service provider not found.");
+    }
 
-  // Explicitly type sum as bigint and r as the review object
-  const totalRatings = serviceProvider.reviews.reduce(
-    (sum: bigint, r: { clientId: string; rating: bigint; comment: string; createdAt: bigint }) => sum + r.rating, 
-    0n  // Start sum with a bigint value
-  );
-  
-  serviceProvider.average_rating = totalRatings / BigInt(serviceProvider.reviews.length);
+    const serviceProvider = serviceProviderOpt.Some;
+    serviceProvider.reviews.push(review);
 
-  serviceProviderStorage.insert(serviceProvider.id, serviceProvider);
-  return Ok(null);
-}),
+    const totalRatings = serviceProvider.reviews.reduce(
+      (sum: bigint, r: { clientId: string; rating: bigint; comment: string; createdAt: bigint }) => sum + r.rating, 
+      0n
+    );
+    
+    serviceProvider.average_rating = totalRatings / BigInt(serviceProvider.reviews.length);
 
+    serviceProviderStorage.insert(serviceProvider.id, serviceProvider);
+    return Ok(serviceProvider);
+  }),
 
   // Create a new client
   createClient: update([ClientPayload], Result(Client, text), (payload) => {
-    if (!payload.name || !payload.contact_info) {
-      return Err("Ensure 'name' and 'contact_info' are provided.");
+    const validationResult = validateClientPayload(payload);
+    if ("Err" in validationResult) {
+      return Err(validationResult.Err);
     }
 
     const id = uuidv4();
@@ -263,4 +300,59 @@ addReview: update([ReviewPayload], Result(Null, text), (payload) => {
       return Ok(bookings);
     }
   ),
+
+  // New route: Get all service providers
+  getAllServiceProviders: query([], Result(Vec(ServiceProvider), text), () => {
+    const serviceProviders = serviceProviderStorage.values();
+    if (serviceProviders.length === 0) {
+      return Err("No service providers found.");
+    }
+    return Ok(serviceProviders);
+  }),
+
+  // New route: Get client booking history
+  getClientHistory: query([text], Result(Vec(Booking), text), (clientId) => {
+    const bookings = bookingStorage
+      .values()
+      .filter((booking) => booking.client_id === clientId);
+
+    if (bookings.length === 0) {
+      return Err("No bookings found for this client.");
+    }
+    return Ok(bookings);
+  }),
+
+  // New route: Cancel a booking
+  cancelBooking: update([text], Result(Booking, text), (bookingId) => {
+    const bookingOpt = bookingStorage.get(bookingId);
+    if ("None" in bookingOpt) {
+      return Err("Booking not found.");
+    }
+
+    const booking = bookingOpt.Some;
+    if (booking.status !== BookingStatusEnum.Pending && booking.status !== BookingStatusEnum.Confirmed) {
+      return Err("Only pending or confirmed bookings can be canceled.");
+    }
+
+    booking.status = BookingStatusEnum.Canceled;
+    bookingStorage.insert(bookingId, booking);
+    return Ok(booking);
+  }),
+
+  // New route: Confirm a booking
+  confirmBooking: update([text], Result(Booking, text), (bookingId) => {
+    const bookingOpt = bookingStorage.get(bookingId);
+    if ("None" in bookingOpt) {
+      return Err("Booking not found.");
+    }
+
+    const booking = bookingOpt.Some;
+    if (booking.status !== BookingStatusEnum.Pending) {
+      return Err("Only pending bookings can be confirmed.");
+    }
+
+    booking.status = BookingStatusEnum.Confirmed;
+    bookingStorage.insert(bookingId, booking);
+    return Ok(booking);
+  }),
 });
